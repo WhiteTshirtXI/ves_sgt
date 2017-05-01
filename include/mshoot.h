@@ -25,7 +25,10 @@
 /* IMPLEMENTATIONS */
 
 /* Given the guess s for the solution vector x(t;p), compute the function vector F to be zeroed 
- * and Jacobian matrix DF for Newton-Raphson iteration. */
+ * and Jacobian matrix DF for Newton-Raphson iteration. 
+ *   N : half the number of shooting segments for 2*N+1 shooting points  
+ *   M : number of variables (order of the differential system)
+ */
 void func(int N, int M, double *t, double *p, double *s, double *F, double *DF){
 
 	/*--- INITIALIZATION  ---*/
@@ -66,9 +69,7 @@ void func(int N, int M, double *t, double *p, double *s, double *F, double *DF){
 	double *DF_rc = (double*) calloc(        M*(2*N+1)*M, sizeof(double));
 
 	double *I     = (double*) calloc(        M        *M, sizeof(double)); // identity matrix
-
 	double *G     = (double*) calloc(        M        *M, sizeof(double)); // partial derivatives
-	
 	double *A     = (double*) calloc(        M        *M, sizeof(double)); // boundary conditions
 	double *B     = (double*) calloc(        M        *M, sizeof(double));
 	double *c     = (double*) calloc(                  M, sizeof(double));
@@ -102,7 +103,7 @@ void func(int N, int M, double *t, double *p, double *s, double *F, double *DF){
 		s_m[i] = s[N*M+i];
 	}
 	
-	// Generate boundary condition coefficients
+	// Generate boundary condition coefficients A, B, c
 	for (int i = 0; i < M; i++){
 		int j = 0;
 		x[i] = s[i*M + j];
@@ -110,6 +111,25 @@ void func(int N, int M, double *t, double *p, double *s, double *F, double *DF){
 	bcs('S', 0, N, M, a, b, p, x, A, B, c);
 
 	/*--- CAlCULATE X FROM S (TAKE SHOTS) ---*/
+	// calculate x_r (rear + midpoint)
+	for (int i = 0; i < N; i++){
+		double u0 = u_r[i*2+0];
+		double u1 = u_r[i*2+1];
+		for (int j = 0; j < M; j++){
+			sig[j] = s_r[i*M+j];
+		}
+		// CALCULATE CHI NOW
+
+		for (int j = 0; j < M; j++){
+			x_r[i*M=j] = chi[j];
+		}
+		
+	}
+
+	// calculate x_f (front + midpoint)
+	for (int i = 0; i < N; i++){
+	}
+
 
 	// START FROM HERE!!!
 	// START FROM HERE!!!
@@ -163,9 +183,7 @@ void func(int N, int M, double *t, double *p, double *s, double *F, double *DF){
 	free(DF_rc);
 
 	free(I    ); 
-
 	free(G    ); 
-
 	free(A    ); 
 	free(B    ); 
 	free(c    ); 
@@ -177,8 +195,70 @@ void newt(){
 void solve(double *s){
 }
 
-// Runge-Kutta integrator (4th-order multi-step scheme)
-void rk4(){
+/* Given initial condition x(u0;p) = x0, integrate from u = u0 to u1
+ * using a fourth-order Runge-Kutta scheme and output x(u1;p) = x1. 
+ *   M : number of variables (order of the differential system)
+ *   NRK : number of Runge-Kutta steps
+ *   a : lower bound of domain
+ *   b : upper bound of domain
+ *
+ * NOTE FOR LATER (5/1/17): Replace odesS0 with general odes for function evaluations.
+ *
+ */
+void rk4(int M, int NRK, double a, double b, double u0, double u1, 
+         double *p, double *x0, double *x1){
+	// define pointers and allocate memory
+	double *x00 = (double *) calloc(M, sizeof(double));
+	double *x01 = (double *) calloc(M, sizeof(double));
+	double *x02 = (double *) calloc(M, sizeof(double));
+	double *f   = (double *) calloc(M, sizeof(double));
+
+	// initialization
+	double u = u0;
+	for (int i = 0; i < M; i++)
+		x02[i] = x0[i];
+	
+	// Runge-Kutta multi-step integration
+	double du = (u1 - u0)/NRK;
+	for (int irk = 0; irk < NRK; irk++){
+		// setup
+		u = irk*du;
+		for (int i = 0; i < M; i++)
+			x00[i] = x02[i];
+
+		// first step
+		for (int i = 0; i < M; i++)
+			x01[i] = x00[i];
+		odesS0(a, b, u, p, x01, f);
+		for (int i = 0; i < M; i++)
+			x02[i] += du*(1.0/6.0)*f[i];
+
+		// second and third steps
+		for (int j = 0; j < 2; j++){
+			for (int i = 0; i < M; i++)
+				x01[i] = x00[i] + du*0.5*f[i];
+			odesS0(a, b, u, p, x01, f);
+			for (int i = 0; i < M; i++)
+				x02[i] += du*(1.0/3.0)*f[i];
+		}
+
+		// fourth step
+		for (int i = 0; i < M; i++)
+			x01[i] = x00[i] + du*f[i];
+		odesS0(a, b, u, p, x01, f);
+		for (int i = 0; i < M; i++)
+			x02[i] += du*(1.0/6.0)*f[i];
+	}
+
+	// store results
+	for (int i = 0; i < M; i++)
+		x1[i] = x02[i];
+
+	// free memory
+	free(x00);
+	free(x01);
+	free(x02);
+	free(f  );
 }
 
 
