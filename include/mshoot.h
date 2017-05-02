@@ -21,6 +21,8 @@
 #include "bcs.h"
 
 /* PROTOTYPES */
+void rk4(int M, int NRK, double a, double b, double u0, double u1, 
+         double *p, double *x0, double *x1);
 
 /* IMPLEMENTATIONS */
 
@@ -29,7 +31,7 @@
  *   N : half the number of shooting segments for 2*N+1 shooting points  
  *   M : number of variables (order of the differential system)
  */
-void func(int N, int M, double *t, double *p, double *s, double *F, double *DF){
+void func(int N, int M, int NRK, double *t, double *p, double *s, double *F, double *DF){
 
 	/*--- INITIALIZATION  ---*/
 	double ds = 0.000001;
@@ -55,24 +57,24 @@ void func(int N, int M, double *t, double *p, double *s, double *F, double *DF){
 	double *x_r   = (double*) calloc(   N   *M, sizeof(double));
 	double *x_f   = (double*) calloc(   N   *M, sizeof(double));
 
-	double *r     = (double*) calloc(        M, sizeof(double));	// boundary condition vector
-
 	double *F     = (double*) calloc((2*N+1)*M, sizeof(double));	// vector to be zeroed
 	double *F_r   = (double*) calloc((  N-1)*M, sizeof(double));
 	double *F_f   = (double*) calloc((  N-1)*M, sizeof(double));
 	double *F_m   = (double*) calloc(     2 *M, sizeof(double));
-	double *F_rc  = (double*) calloc(        M, sizeof(double));
+	double *F_bc  = (double*) calloc(        M, sizeof(double));
 
 	double *DF    = (double*) calloc((2*N+1)*M*(2*N+1)*M, sizeof(double));	// Jacobian matrix
 	double *DF_r  = (double*) calloc(   N   *M*(2*N+1)*M, sizeof(double));
 	double *DF_f  = (double*) calloc(   N   *M*(2*N+1)*M, sizeof(double));
-	double *DF_rc = (double*) calloc(        M*(2*N+1)*M, sizeof(double));
+	double *DF_bc = (double*) calloc(        M*(2*N+1)*M, sizeof(double));
 
 	double *I     = (double*) calloc(        M        *M, sizeof(double)); // identity matrix
 	double *G     = (double*) calloc(        M        *M, sizeof(double)); // partial derivatives
 	double *A     = (double*) calloc(        M        *M, sizeof(double)); // boundary conditions
 	double *B     = (double*) calloc(        M        *M, sizeof(double));
 	double *c     = (double*) calloc(                  M, sizeof(double));
+	double *r     = (double*) calloc(        M,           sizeof(double)); // boundary condition vector
+
 	
 	// Domain decomposition
 	double a = t[    0];	// lower boundary
@@ -103,13 +105,25 @@ void func(int N, int M, double *t, double *p, double *s, double *F, double *DF){
 		s_m[i] = s[N*M+i];
 	}
 	
-	// Generate boundary condition coefficients A, B, c
+	// Generate boundary condition vector
 	for (int i = 0; i < M; i++){
 		int j = 0;
 		x[i] = s[i*M + j];
 	}
 	bcs('S', 0, N, M, a, b, p, x, A, B, c);
+	for (int i = 0; i < M; i++){
+		r[i] = 0.0;
+		for (int j = 0; j < M; j++){
+			r[i] = A[i*M+j]*sig0[j] + B[i*M+j]*sigM[j] - c[i];
+		}
+	}
 
+	// Identity matrix
+	for (int i = 0; i < M; i++){
+		I[i*M + i] = 1.0;
+	}
+	
+	
 	/*--- CAlCULATE X FROM S (TAKE SHOTS) ---*/
 	// calculate x_r (rear + midpoint)
 	for (int i = 0; i < N; i++){
@@ -118,31 +132,145 @@ void func(int N, int M, double *t, double *p, double *s, double *F, double *DF){
 		for (int j = 0; j < M; j++){
 			sig[j] = s_r[i*M+j];
 		}
-		// CALCULATE CHI NOW
-
+		rk4(M, NRK, a, b, u0, u1, p, sig, chi);
 		for (int j = 0; j < M; j++){
-			x_r[i*M=j] = chi[j];
+			x_r[i*M+j] = chi[j];
 		}
-		
 	}
 
 	// calculate x_f (front + midpoint)
 	for (int i = 0; i < N; i++){
+		double u0 = u_f[i*2+0];
+		double u1 = u_f[i*2+1];
+		for (int j = 0; j < M; j++){
+			sig[j] = s_f[i*M+j];
+		}
+		rk4(M, NRK, a, b, u0, u1, p, sig, chi);
+		for (int j = 0; j < M; j++){
+			x_f[i*M+j] = chi[j];
+		}
 	}
-
-
-	// START FROM HERE!!!
-	// START FROM HERE!!!
-	// START FROM HERE!!!
-	// START FROM HERE!!!
-	// START FROM HERE!!!
-	// START FROM HERE!!!
 	
-	
+
 	/*--- CALCULATE F (VECTOR TO BE ZEROED) ---*/
 	
+	// calculate F_r : rows 1 to (N-1)*M of F
+	// (rear continuity conditions)
+	for (int i = 0; i < N-1; i++){
+		for (int j = 0; j < M; j++){
+			sig[j] = s_r[(i+1)*M+j];
+			chi[j] = x_r[ i   *M+j];
+			F_r[i*M+j] = chi[j] - sig[j];
+		}
+	}
 	
-	/*--- CALCULATE DF (JACOBIAN MATRIX) ---*/
+	// calculate F_m : rows (N-1)*M + 1 to (N+1)*M of F
+	// (midpoint continuity conditions)
+	for (int j = 0; j < M; j++){
+		sig[j] = s_m[ i   *M+j];
+		chi[j] = x_r[(N-1)*M+j];
+		F_m[j] = chi[j] - sig[j];
+		chi[j] = x_f[    j];
+		F_m[M+j] = chi[j] - sig[j];
+	}
+	
+	// calculate F_f : rows (N+1)*M + 1 to (2*N)*M of F
+	// (front continuity conditions)
+	for (int i = 0; i < N-1; i++){
+		for (int j = 0; j < M; j++){
+			sig[j] = s_f[ i   *M+j];
+			chi[j] = x_f[(i+1)*M+j];
+			F_f[i*M+j] = chi[j] - sig[j];
+		}
+	}
+	
+	// calculate F_bc : rows (2*N)*M + 1 to (2*N+1)*M of F
+	// (boundary conditions)
+	for (int j = 0; j < M; j++){
+		F_bc[j] = r[j];
+	}
+
+	// concatenate F
+	for (int i = 0; i < (N-1)*M; i++)
+		F[i] = F_r[i];
+	for (int i = (N-1)*M; i < (N+1)*M; i++)
+		F[i] = F_m[i];
+	for (int i = (N+1)*M; i < (2*N)*M; i++)
+		F[i] = F_f[i];
+	for (int i = (2*N)*M; i < (2*N+1)*M; i++)
+		F[i] = F_bc[i];
+	
+	
+	/*--- CALCULATE DF (JACOBIAN MATRIX) USING FORWARD DIFFERENCES---*/
+	// calculate DF_r : rows 1 to N*M of DF
+	for (int i = 0; i < N; i++){
+		double u0 = u_r[i*2+0];
+		double u1 = u_r[i*2+1];
+		for (int j = 0; j < M; j++){
+			sig[j] = s_r[i*M + j];
+			chi[j] = x_r[i*M + j];
+		}
+		for (int j = 0; j < M; j++){
+			for (int k = 0; k < M; k++)
+				sigp[k] = sig[k];
+			sigp[j] = sigp[j] + ds;
+			rk4(M, NRK, a, b, u0, u1, p, sigp, chip);
+			for (int k = 0; k < M; k++){
+				dx[k] = chip[k] - chi[k];
+				G[k*M+j] = dx[k]/ds;
+			}
+		}
+		for (int j = 0; j < M; j++){
+			for (int k = 0; k < M; k++){
+				DF_r[(i*M+j)*(N*M)+( i   *M+k)] =  G[j*M+k];
+				DF_r[(i*M+j)*(N*M)+((i+1)*M+k)] = -I[j*M+k];
+			}
+		}
+	}
+		
+	// calculate DF_f : rows NM + 1 to (2*N)*M of DF
+	for (int i = 0; i < N; i++){
+		double u0 = u_f[i*2+0];
+		double u1 = u_f[i*2+1];
+		for (int j = 0; j < M; j++){
+			sig[j] = s_f[i*M + j];
+			chi[j] = x_f[i*M + j];
+		}
+		for (int j = 0; j < M; j++){
+			for (int k = 0; k < M; k++)
+				sigp[k] = sig[k];
+			sigp[j] = sigp[j] + ds;
+			rk4(M, NRK, a, b, u0, u1, p, sigp, chip);
+			for (int k = 0; k < M; k++){
+				dx[k] = chip[k] - chi[k];
+				G[k*M+j] = dx[k]/ds;
+			}
+		}
+		for (int j = 0; j < M; j++){
+			for (int k = 0; k < M; k++){
+				DF_f[(i*M+j)*(N*M)+((N+i+1)*M+k)] =  G[j*M+k];
+				DF_f[(i*M+j)*(N*M)+((N+i  )*M+k)] = -I[j*M+k];
+			}
+		}
+	}
+
+	// calculate DF_bc : rows (2*N)*M + 1 to (2*N+1)*M of DF
+	for (int j = 0; j < M; j++){
+		for (int k = 0; k < M; k++){
+			DF[j*M+        k] = A[j*M+k];
+			DF[j*M+(2*N)*M+k] = B[j*M+k];
+		}
+	}
+
+	// concatenate DF
+
+
+	// START FROM HERE!!!
+	// START FROM HERE!!!
+	// START FROM HERE!!!
+	// START FROM HERE!!!
+	// START FROM HERE!!!
+	// START FROM HERE!!!
 
 
 
@@ -169,24 +297,23 @@ void func(int N, int M, double *t, double *p, double *s, double *F, double *DF){
 	free(x_r  ); 
 	free(x_f  ); 
 
-	free(r    ); 
-
 	free(F    ); 
 	free(F_r  ); 
 	free(F_f  ); 
 	free(F_m  ); 
-	free(F_rc ); 
+	free(F_bc ); 
 
 	free(DF   ); 
 	free(DF_r ); 
 	free(DF_f ); 
-	free(DF_rc);
+	free(DF_bc);
 
 	free(I    ); 
 	free(G    ); 
 	free(A    ); 
 	free(B    ); 
 	free(c    ); 
+	free(r    ); 
 }
 
 void newt(){
